@@ -70,6 +70,9 @@ data/                   local data (not committed)
 
 ## Rules for this repo
 
+**Team and AI agents: read [AGENTS.md](AGENTS.md) first** (who owns which file, frozen interfaces, branch/PR workflow).
+
+
 - Never commit API keys: keep them in `.env` (already in `.gitignore`).
 - No model weights or large data files in git; link to Hugging Face Hub instead.
 - Every number in the report must come from our own runs (`evaluate.py`).
