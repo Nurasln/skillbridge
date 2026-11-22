@@ -60,13 +60,13 @@ data/                   local data (not committed)
 
 | Member | Role | Component |
 | --- | --- | --- |
-| TBD | Team Leader / Project Manager | Pipeline integration, repository, README |
-| TBD | Data Engineer | `data.py` |
-| TBD | Research & Literature | `baselines.py` |
-| TBD | Model / Retrieval Engineer | `retrieval.py` |
-| TBD | AI / LLM Engineer | `rerank.py`, `explain.py` |
-| TBD | Evaluation & Testing | `evaluate.py` |
-| TBD | Frontend / UI Developer | `app.py` |
+| Dilara Gültekin | Team Leader / Project Manager | Pipeline integration, repository, README |
+| Arda Kocadoru | Data Engineer | `data.py` |
+| Efe Kunttas | Research & Literature | `baselines.py` |
+| Recep Kamil Fırat | Model / Retrieval Engineer | `retrieval.py` |
+| Asiye Nur Aslan | AI / LLM Engineer | `rerank.py`, `explain.py` |
+| Efe Muhammed Orhan | Evaluation & Testing | `evaluate.py` |
+| Eren Acar | Frontend / UI Developer | `app.py` |
 
 ## Rules for this repo
 

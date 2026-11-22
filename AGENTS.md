@@ -8,14 +8,14 @@ The goal: nobody's agent breaks someone else's work.
 | Role | Person | Owns (only edit these) | Delivers |
 | --- | --- | --- | --- |
 | Team Leader / PM | Dilara Gültekin | `README.md`, `pipeline.py` (integration), `AGENTS.md` | Wiring, merges, report |
-| Data Engineer | TBD | `src/skillbridge/data.py`, `data/` scripts | `load_jobs()`, `extract_cv_text()`, `clean_text()`, gold test set |
-| Research & Literature | TBD | `src/skillbridge/baselines.py`, `docs/` | `tfidf_rank()`, `bm25_rank()`, related work |
+| Data Engineer | Arda Kocadoru | `src/skillbridge/data.py`, `data/` scripts | `load_jobs()`, `extract_cv_text()`, `clean_text()`, gold test set |
+| Research & Literature | Efe Kunttas | `src/skillbridge/baselines.py`, `docs/` | `tfidf_rank()`, `bm25_rank()`, related work |
 | Model / Retrieval | Recep Kamil Fırat | `src/skillbridge/retrieval.py` | `build_index()`, `dense_search()`, `hybrid_search()` (done) |
-| AI / LLM Engineer | TBD | `src/skillbridge/rerank.py`, `src/skillbridge/explain.py` | cross-encoder `rerank()`, Gemini `explain()` |
-| Evaluation & Testing | TBD | `src/skillbridge/evaluate.py`, `tests/` | Recall@5/10, MRR, latency, cost table |
-| Frontend / UI | TBD | `app.py` | Streamlit screens |
+| AI / LLM Engineer | Asiye Nur Aslan | `src/skillbridge/rerank.py`, `src/skillbridge/explain.py` | cross-encoder `rerank()`, Gemini `explain()` |
+| Evaluation & Testing | Efe Muhammed Orhan | `src/skillbridge/evaluate.py`, `tests/` | Recall@5/10, MRR, latency, cost table |
+| Frontend / UI | Eren Acar | `app.py` | Streamlit screens |
 
-Fill in TBD names in this table (leader's job). If your task needs a change in a file you do not own,
+Source: SWE015 team registration sheet (Group 8, magnum opus 5.5). If your task needs a change in a file you do not own,
 **do not edit it**: open an issue or tell the owner.
 
 ## 2. Contracts (frozen, change only with team agreement)
