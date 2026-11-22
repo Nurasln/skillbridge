@@ -34,11 +34,19 @@ cp .env.example .env   # then put your own API key in .env
 streamlit run app.py
 ```
 
+## Module contract
+
+Every module passes jobs as `{"id", "text", ...}` dicts; rankers add `"score"`,
+`explain` returns `{"matched", "missing", "summary"}`. `pipeline.py` calls the modules in
+order and falls back to safe defaults for anything still `NotImplementedError`, so each
+member can work on their own file independently. Quick check: `cd src && python -m skillbridge.pipeline`.
+
 ## Repository layout
 
 ```
-app.py                  Streamlit interface
+app.py                  Streamlit interface (display only)
 src/skillbridge/
+    pipeline.py         wires all modules together; shared data contract
     data.py             dataset loading, CV text extraction, cleaning
     baselines.py        TF-IDF and BM25 rankers
     retrieval.py        embeddings, FAISS index, dense + hybrid search
