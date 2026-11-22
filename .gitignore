@@ -1,0 +1,22 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# data and models (too large for git)
+data/*
+!data/.gitkeep
+models/
+*.faiss
+*.bin
+*.safetensors
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
