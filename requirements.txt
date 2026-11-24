@@ -9,3 +9,5 @@ datasets
 pypdf
 python-dotenv
 google-genai
+ftfy
+openpyxl
