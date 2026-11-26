@@ -16,19 +16,25 @@ How it works:
 - Model: set by SKILLBRIDGE_LLM_MODEL. Default gemini-3.1-flash-lite: on
   2026-11-26 gemini-2.5-flash returned 404 for new keys and the larger flash
   models returned 503 (high demand); flash-lite answered in ~2 s.
-- If the Gemini API fails (503 busy, quota, network) we raise
-  NotImplementedError too, so the pipeline shows an empty explanation and
-  lists the fallback instead of the whole app crashing during a demo.
+- If the Gemini call fails for any reason (503 busy, quota, dropped network,
+  timeout) we raise NotImplementedError too, so the pipeline shows an empty
+  explanation and lists the fallback instead of the whole app crashing during
+  a demo. Network errors come from the HTTP library (httpx2.ConnectError,
+  not genai's APIError), so the call is guarded with a broad except.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from pydantic import BaseModel
 
+log = logging.getLogger(__name__)
+
 MODEL_NAME = os.getenv("SKILLBRIDGE_LLM_MODEL", "gemini-3.1-flash-lite")
+TIMEOUT_MS = 20_000    # per request; a hung call must not freeze the demo
 MAX_CV_CHARS = 6000    # long texts are cut to keep cost and latency low
 MAX_JOB_CHARS = 4000
 MAX_ITEMS = 6
@@ -59,17 +65,22 @@ class _Explanation(BaseModel):
 
 
 _client = None
+_warned = False  # log the missing-key warning only once
 
 
 def _get_client():
-    global _client
+    global _client, _warned
     if _client is None:
         from dotenv import load_dotenv
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
         if not os.getenv("GEMINI_API_KEY"):
+            if not _warned:
+                _warned = True
+                log.warning("GEMINI_API_KEY is not set: explanations stay empty (copy .env.example to .env)")
             raise NotImplementedError("GEMINI_API_KEY is not set (copy .env.example to .env)")
         from google import genai
-        _client = genai.Client()  # reads GEMINI_API_KEY from the environment
+        # reads GEMINI_API_KEY from the environment
+        _client = genai.Client(http_options={"timeout": TIMEOUT_MS})
     return _client
 
 
@@ -91,6 +102,8 @@ def explain(cv_text: str, job_text: str) -> dict:
         )
     except errors.APIError as e:
         raise NotImplementedError(f"Gemini call failed ({e.code}): {e.message}") from e
+    except Exception as e:  # network errors, timeouts, bad replies: never crash the app
+        raise NotImplementedError(f"Gemini request failed: {type(e).__name__}: {e}") from e
     result: _Explanation | None = response.parsed
     if result is None:
         raise NotImplementedError("Gemini returned no parsable JSON")

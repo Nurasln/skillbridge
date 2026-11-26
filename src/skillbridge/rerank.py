@@ -12,6 +12,11 @@ How it works:
   It is too slow for all jobs, so it only reorders the top 20 from hybrid_search.
 - Model: set by SKILLBRIDGE_RERANK_MODEL (default below, chosen on the dev split).
 - Uses the GPU when one is available, otherwise the CPU.
+- If the model cannot be loaded (offline demo machine with no cache, typo in
+  the model name) we raise NotImplementedError, so the pipeline keeps the
+  hybrid order instead of crashing.
+- Limitation: CV + job share MAX_LENGTH tokens, so with long CVs much of the
+  job text is cut. The dev-split numbers were measured with this setting.
 """
 
 from __future__ import annotations
@@ -27,8 +32,11 @@ _model = None
 def _get_model():
     global _model
     if _model is None:
-        from sentence_transformers import CrossEncoder
-        _model = CrossEncoder(MODEL_NAME, max_length=MAX_LENGTH)
+        try:
+            from sentence_transformers import CrossEncoder
+            _model = CrossEncoder(MODEL_NAME, max_length=MAX_LENGTH)
+        except Exception as e:  # offline, no cache, wrong name: keep the retrieval order
+            raise NotImplementedError(f"reranker {MODEL_NAME} could not be loaded: {type(e).__name__}: {e}") from e
     return _model
 
 
