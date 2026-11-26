@@ -32,7 +32,10 @@ Command line (run from src/):
     python -m skillbridge.data report        dataset statistics -> data/dataset_report.md
     python -m skillbridge.data export        cleaned pools -> data/jobs_<pool>.jsonl
     python -m skillbridge.data review-sheet  blind review workbook -> data/gold/
-    python -m skillbridge.data gold          filled workbook -> data/gold/gold_labels.csv
+    python -m skillbridge.data cross-sheet   second-reviewer tabs -> data/gold/review_cross.xlsx
+    python -m skillbridge.data gold --sheet X.xlsx
+                                             filled workbook -> data/gold/gold_labels.csv
+                                             (+ agreement.md)
 """
 
 from __future__ import annotations
@@ -65,6 +68,7 @@ LABELS = (GOOD, POTENTIAL, NO)
 
 GOLD_SIZE = 49          # 7 reviewers x 7 CVs (project guide: "~50 CV, herkes ~7")
 N_REVIEWERS = 7
+CROSS_PER_REVIEWER = 1  # CVs each reviewer also labels for another reviewer (agreement check)
 POOL_DEPTH = 5          # BM25 / dense top-k added to each CV's review candidates
 NEAR_DUP_COSINE = 0.95  # TF-IDF cosine above which two job posts count as one
 GOLD_SEED = "skillbridge-gold-v1"
@@ -689,19 +693,66 @@ def _review_candidates():
     return df.merge(lab, on=["cv_id", "job_id"], how="left")
 
 
-def _write_review_sheet() -> Path:
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font
-    from openpyxl.worksheet.datavalidation import DataValidation
-
-    GOLD_DIR.mkdir(parents=True, exist_ok=True)
+def _review_rows():
+    """Review rows in sheet order, with the CV owner (R1..R7) and the hidden source labels."""
     cands = _review_candidates()
     gold = sorted(gold_cv_ids(), key=_stable_order)
     reviewer = {c: f"R{i % N_REVIEWERS + 1}" for i, c in enumerate(gold)}
     cands["reviewer"] = cands.cv_id.map(reviewer)
     cands["order"] = (cands.cv_id + cands.job_id).map(_stable_order)
-    cands = cands.sort_values(["reviewer", "cv_id", "order"])
-    cands.drop(columns="order").to_csv(GOLD_DIR / "review_key.csv", index=False)   # labels kept out of the sheet
+    return cands.sort_values(["reviewer", "cv_id", "order"]).drop(columns="order")
+
+
+def _review_key():
+    """The rows the shared workbook was built from (review_key.csv); recomputed if the file is missing."""
+    import pandas as pd
+
+    path = GOLD_DIR / "review_key.csv"
+    if path.exists():
+        return pd.read_csv(path, dtype=str)
+    log.warning("%s not found; recomputing the review rows", path)
+    return _review_rows()
+
+
+def _cross_assignment(key) -> dict[str, str]:
+    """cv_id -> second reviewer: reviewer R(k+1) also labels CROSS_PER_REVIEWER CVs of R(k)."""
+    owner = key.drop_duplicates("cv_id").set_index("cv_id")["reviewer"]
+    out = {}
+    for k in range(1, N_REVIEWERS + 1):
+        mine = sorted((c for c, r in owner.items() if r == f"R{k}"), key=lambda c: _stable_order(c + ":cross"))
+        for c in mine[:CROSS_PER_REVIEWER]:
+            out[c] = f"R{k % N_REVIEWERS + 1}"
+    return out
+
+
+def _add_review_tab(wb, name: str, part, jobs: dict) -> None:
+    from openpyxl.styles import Font
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    sh = wb.create_sheet(name)
+    sh.append(["cv_id", "job_id", "job_title", "job_start", "judgement", "note"])
+    for c in sh[1]:
+        c.font = Font(bold=True)
+    for row in part.itertuples(index=False):
+        job = jobs[row.job_id]
+        sh.append([row.cv_id, row.job_id, job.get("title", ""), job["text"][:160], None, None])
+    dv = DataValidation(type="list", formula1=f'"{GOOD},{POTENTIAL},{NO}"', allow_blank=True)
+    sh.add_data_validation(dv)
+    dv.add(f"E2:E{len(part) + 1}")
+    for col, width in zip("ABCDEF", (16, 16, 30, 70, 16, 30)):
+        sh.column_dimensions[col].width = width
+    sh.freeze_panes = "A2"
+
+
+def _write_review_sheet() -> Path:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+
+    GOLD_DIR.mkdir(parents=True, exist_ok=True)
+    cands = _review_rows()
+    cands.to_csv(GOLD_DIR / "review_key.csv", index=False)   # labels kept out of the sheet
+    gold = sorted(gold_cv_ids(), key=_stable_order)
+    reviewer = cands.drop_duplicates("cv_id").set_index("cv_id")["reviewer"]
 
     test = _labelled_test_pairs()
     cv_text = test.drop_duplicates("cv_id").set_index("cv_id")["cv_text"]
@@ -725,20 +776,7 @@ def _write_review_sheet() -> Path:
     ws.column_dimensions["A"].width = 110
 
     for r in sorted(cands.reviewer.unique()):
-        sh = wb.create_sheet(r)
-        sh.append(["cv_id", "job_id", "job_title", "job_start", "judgement", "note"])
-        for c in sh[1]:
-            c.font = Font(bold=True)
-        part = cands[cands.reviewer == r]
-        for row in part.itertuples(index=False):
-            job = jobs[row.job_id]
-            sh.append([row.cv_id, row.job_id, job.get("title", ""), job["text"][:160], None, None])
-        dv = DataValidation(type="list", formula1=f'"{GOOD},{POTENTIAL},{NO}"', allow_blank=True)
-        sh.add_data_validation(dv)
-        dv.add(f"E2:E{len(part) + 1}")
-        for col, width in zip("ABCDEF", (16, 16, 30, 70, 16, 30)):
-            sh.column_dimensions[col].width = width
-        sh.freeze_panes = "A2"
+        _add_review_tab(wb, r, cands[cands.reviewer == r], jobs)
 
     for name, rows in (("CVs", [(c, reviewer[c], cv_text[c]) for c in gold]),
                        ("Jobs", [(j["id"], j.get("title", ""), j["text"]) for j in jobs.values()])):
@@ -754,19 +792,151 @@ def _write_review_sheet() -> Path:
     return path
 
 
+def _write_cross_sheet() -> Path:
+    """Second-reviewer tabs (R<k>_cross) to import into the shared workbook as new sheets."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    GOLD_DIR.mkdir(parents=True, exist_ok=True)
+    key = _review_key()
+    cross = _cross_assignment(key)
+    jobs = {j["id"]: j for j in load_jobs("eval")}
+    rows = key[key.cv_id.isin(cross)].copy()
+    rows["reviewer"] = rows.cv_id.map(cross)
+    rows["order"] = (rows.cv_id + rows.job_id + ":cross").map(_stable_order)
+    rows = rows.sort_values(["reviewer", "cv_id", "order"])
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "README_cross"
+    for line in [
+        "SkillBridge gold review - cross-check tabs",
+        "",
+        "Your R<k>_cross tab holds CVs that another reviewer also labels. Same rules and drop-down as your own tab.",
+        "Find the CV by its cv_id in the CVs sheet (Ctrl+F); its reviewer column shows the other person, that is expected.",
+        "Do not open the other reviewer's tab and do not discuss these rows: the two judgements must be independent.",
+        "Your own R<k> tab is the gold label; these rows only measure how often two reviewers agree.",
+    ]:
+        ws.append([line])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.column_dimensions["A"].width = 110
+    for r in sorted(rows.reviewer.unique()):
+        _add_review_tab(wb, f"{r}_cross", rows[rows.reviewer == r], jobs)
+    path = GOLD_DIR / "review_cross.xlsx"
+    wb.save(path)
+    return path
+
+
+def _check_tabs(sheets: dict, pattern: str, expected, strict: bool):
+    """Validate the tabs whose name matches `pattern` against the rows they were built with.
+
+    Deleted, added, duplicated or moved rows, edited ids, renamed columns and
+    values typed outside the drop-down all corrupt the gold set silently, so they
+    are errors. Unjudged rows are errors only when `strict`.
+    Returns (rows [cv_id, job_id, judgement, tab], errors).
+    """
+    import pandas as pd
+
+    def clean(v):
+        return v.strip() if isinstance(v, str) and v.strip() else None
+
+    def show(pairs):
+        return ", ".join(f"{c}/{j}" for c, j in sorted(pairs)[:3])
+
+    errors, parts = [], []
+    tabs = {n: df for n, df in sheets.items() if re.fullmatch(pattern, n)}
+    for name in sorted(set(expected.tab) - set(tabs)):
+        errors.append(f"{name}: tab missing (renamed or deleted?)")
+    for name, df in sorted(tabs.items()):
+        lost = {"cv_id", "job_id", "judgement"} - set(df.columns)
+        if lost:
+            errors.append(f"{name}: column(s) {sorted(lost)} not found (renamed?)")
+            continue
+        df = df[["cv_id", "job_id", "judgement"]].astype(object).map(clean)
+        df = df[df.cv_id.notna() | df.job_id.notna()].assign(tab=name)
+        got = set(df[["cv_id", "job_id"]].itertuples(index=False, name=None))
+        want = set(expected.loc[expected.tab == name, ["cv_id", "job_id"]].itertuples(index=False, name=None))
+        if want - got:
+            errors.append(f"{name}: {len(want - got)} row(s) deleted or ids edited, e.g. {show(want - got)}")
+        if got - want:
+            errors.append(f"{name}: {len(got - want)} unknown row(s), e.g. {show(got - want)}")
+        if df.duplicated(["cv_id", "job_id"]).any():
+            errors.append(f"{name}: {int(df.duplicated(['cv_id', 'job_id']).sum())} duplicated row(s)")
+        bad = df.judgement.notna() & ~df.judgement.isin(LABELS)
+        if bad.any():
+            errors.append(f"{name}: {int(bad.sum())} invalid judgement(s), e.g. {df.judgement[bad].iloc[0]!r}")
+        empty = int(df.judgement.isna().sum())
+        if empty and strict:
+            errors.append(f"{name}: {empty} row(s) not judged yet")
+        elif empty:
+            log.warning("%s: %d row(s) not judged yet; left out of the agreement", name, empty)
+        parts.append(df)
+    rows = pd.concat(parts) if parts else pd.DataFrame(columns=["cv_id", "job_id", "judgement", "tab"])
+    return rows, errors
+
+
+def _kappa(a: list, b: list) -> float:
+    """Cohen's kappa for two raters over the same items."""
+    n = len(a)
+    po = sum(x == y for x, y in zip(a, b)) / n
+    pe = sum((a.count(k) / n) * (b.count(k) / n) for k in set(a) | set(b))
+    return 1.0 if pe == 1 else (po - pe) / (1 - pe)
+
+
+def _agreement_report(gold, second, key) -> str:
+    def compare(title, x, y):
+        x, y = list(x), list(y)
+        if not x:
+            return f"- {title}: no overlapping pairs."
+        acc = sum(p == q for p, q in zip(x, y)) / len(x)
+        good_x, good_y = [v == GOOD for v in x], [v == GOOD for v in y]
+        return (f"- {title}: {len(x)} pairs, exact agreement {acc:.1%}, Cohen's kappa {_kappa(x, y):.2f} "
+                f"(Good Fit vs rest: {_kappa(good_x, good_y):.2f}).")
+
+    per_cv = gold.assign(good=gold.judgement == GOOD).groupby("cv_id").good.sum()
+    before = key.assign(good=key.original_label == GOOD).groupby("cv_id").good.sum()
+    lines = [
+        "# Gold review summary",
+        "",
+        f"- Gold labels: {len(gold)} pairs, {gold.cv_id.nunique()} CVs; {gold.judgement.value_counts().to_dict()}.",
+        f"- Good Fit jobs per CV: mean {per_cv.mean():.2f} after review, {before.mean():.2f} in the original labels. "
+        f"CVs with no Good Fit after review: {int((per_cv == 0).sum())} (they have no relevant job for Recall/MRR).",
+    ]
+    if second is not None:
+        both = gold.merge(second.dropna(subset=["judgement"]), on=["cv_id", "job_id"], suffixes=("", "_2"))
+        lines.append(compare(f"Two reviewers on the cross-check CVs ({both.cv_id.nunique()} CVs)",
+                             both.judgement, both.judgement_2))
+    src = gold.merge(key[["cv_id", "job_id", "original_label", "qwen_label"]], on=["cv_id", "job_id"])
+    orig = src.dropna(subset=["original_label"])
+    qwen = src.dropna(subset=["qwen_label"])
+    lines.append(compare("Team vs original cnamuangtoun labels", orig.judgement, orig.original_label))
+    lines.append(compare("Team vs Qwen2.5-32B labels (manohar)", qwen.judgement, qwen.qwen_label))
+    return "\n".join(lines) + "\n"
+
+
 def _sheet_to_gold(path: Path) -> Path:
     import pandas as pd
 
     sheets = pd.read_excel(path, sheet_name=None, dtype=str)
-    parts = [df for name, df in sheets.items() if re.fullmatch(r"R\d+", name)]
-    df = pd.concat(parts)[["cv_id", "job_id", "judgement"]]
-    df["judgement"] = df.judgement.str.strip()
-    todo = df.judgement.isna().sum()
-    bad = df[df.judgement.notna() & ~df.judgement.isin(LABELS)]
-    if todo or len(bad):
-        raise SystemExit(f"{todo} rows not judged yet, {len(bad)} invalid values; fix the sheet first")
+    key = _review_key()
+    gold, errors = _check_tabs(sheets, r"R\d+", key.assign(tab=key.reviewer), strict=True)
+    second = None
+    if any(re.fullmatch(r"R\d+_cross", n) for n in sheets):
+        cross = _cross_assignment(key)
+        expected = key[key.cv_id.isin(cross)]
+        expected = expected.assign(tab=expected.cv_id.map(cross) + "_cross")
+        second, more = _check_tabs(sheets, r"R\d+_cross", expected, strict=False)
+        errors += more
+    else:
+        log.warning("no R*_cross tabs in %s; reviewer agreement not computed", path)
+    if errors:
+        raise SystemExit("review sheet has problems, nothing written:\n  " + "\n  ".join(errors))
+    GOLD_DIR.mkdir(parents=True, exist_ok=True)
     out = _gold_labels_file()
-    df.sort_values(["cv_id", "job_id"]).to_csv(out, index=False)
+    gold[["cv_id", "job_id", "judgement"]].sort_values(["cv_id", "job_id"]).to_csv(out, index=False)
+    report = _agreement_report(gold, second, key)
+    (GOLD_DIR / "agreement.md").write_text(report, encoding="utf-8")
+    print(report)
     return out
 
 
@@ -780,7 +950,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("report", help="dataset statistics -> data/dataset_report.md")
     sub.add_parser("export", help="cleaned job pools -> data/jobs_<pool>.jsonl")
     sub.add_parser("review-sheet", help="blind review workbook for the gold set -> data/gold/")
-    g = sub.add_parser("gold", help="filled review workbook -> data/gold/gold_labels.csv")
+    sub.add_parser("cross-sheet", help="second-reviewer tabs -> data/gold/review_cross.xlsx")
+    g = sub.add_parser("gold", help="filled review workbook -> data/gold/gold_labels.csv + agreement.md")
     g.add_argument("--sheet", type=Path, default=GOLD_DIR / "review_sheet.xlsx")
     args = ap.parse_args(argv)
 
@@ -798,6 +969,8 @@ def main(argv: list[str] | None = None) -> None:
             print("wrote", path)
     elif args.cmd == "review-sheet":
         print("wrote", _write_review_sheet(), "and", GOLD_DIR / "review_key.csv")
+    elif args.cmd == "cross-sheet":
+        print("wrote", _write_cross_sheet())
     elif args.cmd == "gold":
         print("wrote", _sheet_to_gold(args.sheet))
 
