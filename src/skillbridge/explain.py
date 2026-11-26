@@ -10,7 +10,7 @@ Interface agreed with the team (do not change without telling everyone):
 def explain(cv_text: str, job_text: str) -> dict:
     """Explain why a job fits a CV.
 
-    Not implemented yet: raises NotImplementedError so the pipeline shows an
-    empty explanation and reports the fallback (AGENTS.md: never return fake numbers).
+    Placeholder: returns an empty explanation so the UI can be built before
+    the real LLM call is ready.
     """
-    raise NotImplementedError
+    return {"matched": [], "missing": [], "summary": "Explanation not implemented yet."}

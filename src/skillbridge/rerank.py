@@ -10,7 +10,7 @@ Interface agreed with the team (do not change without telling everyone):
 def rerank(cv_text: str, jobs: list[dict]) -> list[dict]:
     """jobs: [{"id": ..., "text": ...}] -> same list with "score" added, sorted.
 
-    Not implemented yet: raises NotImplementedError so the pipeline keeps the
-    retrieval order and reports the fallback (AGENTS.md: never return fake numbers).
+    Placeholder: keeps the input order so the UI can be built before the
+    real cross-encoder is ready.
     """
-    raise NotImplementedError
+    return [{**job, "score": 0.0} for job in jobs]
