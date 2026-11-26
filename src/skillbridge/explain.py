@@ -13,7 +13,12 @@ How it works:
 - Needs GEMINI_API_KEY in .env (see .env.example). Without a key the function
   raises NotImplementedError, so the pipeline falls back to an empty
   explanation instead of crashing for teammates who have no key.
-- Model: set by SKILLBRIDGE_LLM_MODEL (default below).
+- Model: set by SKILLBRIDGE_LLM_MODEL. Default gemini-3.1-flash-lite: on
+  2026-11-26 gemini-2.5-flash returned 404 for new keys and the larger flash
+  models returned 503 (high demand); flash-lite answered in ~2 s.
+- If the Gemini API fails (503 busy, quota, network) we raise
+  NotImplementedError too, so the pipeline shows an empty explanation and
+  lists the fallback instead of the whole app crashing during a demo.
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-MODEL_NAME = os.getenv("SKILLBRIDGE_LLM_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("SKILLBRIDGE_LLM_MODEL", "gemini-3.1-flash-lite")
 MAX_CV_CHARS = 6000    # long texts are cut to keep cost and latency low
 MAX_JOB_CHARS = 4000
 MAX_ITEMS = 6
@@ -70,18 +75,25 @@ def _get_client():
 
 def explain(cv_text: str, job_text: str) -> dict:
     """Explain why a job fits a CV: matched skills, missing skills, short summary."""
+    from google.genai import errors
+
     client = _get_client()
     prompt = PROMPT.format(n=MAX_ITEMS, cv=cv_text[:MAX_CV_CHARS], job=job_text[:MAX_JOB_CHARS])
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_schema": _Explanation,
-            "temperature": 0,
-        },
-    )
-    result: _Explanation = response.parsed
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": _Explanation,
+                "temperature": 0,
+            },
+        )
+    except errors.APIError as e:
+        raise NotImplementedError(f"Gemini call failed ({e.code}): {e.message}") from e
+    result: _Explanation | None = response.parsed
+    if result is None:
+        raise NotImplementedError("Gemini returned no parsable JSON")
     return {
         "matched": result.matched[:MAX_ITEMS],
         "missing": result.missing[:MAX_ITEMS],
