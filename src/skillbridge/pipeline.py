@@ -35,6 +35,8 @@ SAMPLE_JOBS = [
     {"id": "j4", "text": "Registered nurse for an intensive care unit."},
 ]
 
+EMPTY_EXPLANATION = {"matched": [], "missing": [], "summary": ""}
+
 
 def _try(fn, *args, fallback):
     try:
@@ -78,15 +80,24 @@ class Pipeline:
         t["retrieval"] = time.perf_counter() - s
 
         s = time.perf_counter()
-        ranked = rerank.rerank(cv, candidates)[:final_k]
+        ranked, ok = _try(rerank.rerank, cv, candidates, fallback=candidates)
+        ranked = ranked[:final_k]
+        fallbacks = list(self.fallbacks)
+        if not ok:
+            fallbacks.append("rerank.rerank -> retrieval order")
         t["rerank"] = time.perf_counter() - s
 
         s = time.perf_counter()
-        matches = [{**job, "explanation": explain.explain(cv, job["text"])} for job in ranked]
+        matches = []
+        for job in ranked:
+            exp, ok = _try(explain.explain, cv, job["text"], fallback=EMPTY_EXPLANATION)
+            if not ok and "explain.explain -> empty" not in fallbacks:
+                fallbacks.append("explain.explain -> empty")
+            matches.append({**job, "explanation": exp})
         t["explain"] = time.perf_counter() - s
 
         t["total"] = time.perf_counter() - start
-        return Result(matches=matches, timings=t, fallbacks=list(self.fallbacks))
+        return Result(matches=matches, timings=t, fallbacks=fallbacks)
 
 
 def read_cv(uploaded_file) -> str:
