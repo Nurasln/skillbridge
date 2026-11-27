@@ -21,12 +21,23 @@ How it works:
   explanation and lists the fallback instead of the whole app crashing during
   a demo. Network errors come from the HTTP library (httpx2.ConnectError,
   not genai's APIError), so the call is guarded with a broad except.
+
+Token usage (for the cost per query in the report):
+- Every successful Gemini call records its token counts (from the API's own
+  usage_metadata) and its duration. explain() itself returns exactly the same
+  dict as before; the counts are read separately:
+      reset_usage()   # before a measurement run
+      ... call explain() / Pipeline().match() ...
+      get_usage()     # -> {"calls", "prompt_tokens", "output_tokens", ..., "per_call": {...}}
+- Cost = tokens x the price on Google's pricing page; no price is stored here.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -90,6 +101,7 @@ def explain(cv_text: str, job_text: str) -> dict:
 
     client = _get_client()
     prompt = PROMPT.format(n=MAX_ITEMS, cv=cv_text[:MAX_CV_CHARS], job=job_text[:MAX_JOB_CHARS])
+    start = time.perf_counter()
     try:
         response = client.models.generate_content(
             model=MODEL_NAME,
@@ -104,6 +116,7 @@ def explain(cv_text: str, job_text: str) -> dict:
         raise NotImplementedError(f"Gemini call failed ({e.code}): {e.message}") from e
     except Exception as e:  # network errors, timeouts, bad replies: never crash the app
         raise NotImplementedError(f"Gemini request failed: {type(e).__name__}: {e}") from e
+    _record_usage(response, time.perf_counter() - start)  # tokens are spent even if parsing fails
     result: _Explanation | None = response.parsed
     if result is None:
         raise NotImplementedError("Gemini returned no parsable JSON")
@@ -111,4 +124,49 @@ def explain(cv_text: str, job_text: str) -> dict:
         "matched": result.matched[:MAX_ITEMS],
         "missing": result.missing[:MAX_ITEMS],
         "summary": result.summary.strip(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Token usage
+# --------------------------------------------------------------------------- #
+
+_TOKEN_FIELDS = {          # our name -> usage_metadata field from the Gemini API
+    "prompt_tokens": "prompt_token_count",
+    "output_tokens": "candidates_token_count",
+    "thinking_tokens": "thoughts_token_count",
+    "total_tokens": "total_token_count",
+}
+
+_usage: list[dict] = []
+_usage_lock = threading.Lock()   # safe if the pipeline ever explains jobs in parallel
+
+
+def _record_usage(response, seconds: float) -> None:
+    meta = getattr(response, "usage_metadata", None)
+    row = {name: int(getattr(meta, field, None) or 0) for name, field in _TOKEN_FIELDS.items()}
+    row["seconds"] = seconds
+    with _usage_lock:
+        _usage.append(row)
+    log.info("gemini %s: %d prompt + %d output tokens, %.2f s",
+             MODEL_NAME, row["prompt_tokens"], row["output_tokens"], seconds)
+
+
+def reset_usage() -> None:
+    """Forget all recorded calls (call this before a measurement run)."""
+    with _usage_lock:
+        _usage.clear()
+
+
+def get_usage() -> dict:
+    """Totals and per-call means of all successful Gemini calls since the last reset."""
+    with _usage_lock:
+        rows = list(_usage)
+    n = len(rows)
+    totals = {k: sum(r[k] for r in rows) for k in (*_TOKEN_FIELDS, "seconds")}
+    return {
+        "model": MODEL_NAME,
+        "calls": n,
+        **totals,
+        "per_call": {k: (v / n if n else 0.0) for k, v in totals.items()},
     }
