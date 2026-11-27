@@ -33,6 +33,11 @@ rerank.rerank(cv_text, jobs) -> same jobs + "score", best first
 explain.explain(cv_text, job_text) -> {"matched": [str], "missing": [str], "summary": str}
 evaluate.recall_at_k(ranked_ids, relevant_ids, k) -> float
 evaluate.reciprocal_rank(ranked_ids, relevant_ids) -> float
+pipeline.Pipeline().match(cv_text, final_k=5, *, method="hybrid_rerank",
+                          with_explanations=True, strict=False) -> Result
+    method: tfidf | bm25 | dense | hybrid | hybrid_rerank
+    evaluation: with_explanations=False, strict=True (a fallback raises instead of
+    silently measuring another method)
 ```
 
 `src/skillbridge/pipeline.py` calls these in order. Until a function is done it must
